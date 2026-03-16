@@ -1,10 +1,15 @@
 services:
-  bot:
-    build: .
+  ubuntu-manager-bot:
+    image: ghcr.io/adandu/discord-ubuntu-manager-bot-antigravity:latest
+    # build: . # Uncomment to build locally
     container_name: discord-ubuntu-manager
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - GUILD_ID=${GUILD_ID}
+      - SERVERS_JSON=${SERVERS_JSON}
     logging:
       driver: "json-file"
       options:
