@@ -12,13 +12,44 @@ class SSHManager:
         self.servers = self._load_servers()
 
     def _load_servers(self) -> List[Dict]:
-        """Load servers from SERVERS_JSON environment variable."""
-        servers_raw = os.getenv('SERVERS_JSON', '[]')
-        try:
-            return json.loads(servers_raw)
-        except json.JSONDecodeError:
-            logger.error("Invalid JSON in SERVERS_JSON environment variable.")
-            return []
+        """Load servers from individual environment variables or SERVERS_JSON."""
+        servers = []
+        
+        # 1. Try loading from numbered environment variables (v0.2.0 style)
+        i = 1
+        while True:
+            alias = os.getenv(f'DISCORD_UBUNTU_SERVER_ALIAS_{i}')
+            if not alias:
+                break
+            
+            server = {
+                "alias": alias,
+                "host": os.getenv(f'DISCORD_UBUNTU_SERVER_IP_{i}'),
+                "user": os.getenv(f'DISCORD_UBUNTU_SERVER_USER_{i}', 'root'),
+                "port": int(os.getenv(f'DISCORD_UBUNTU_SERVER_PORT_{i}', '22')),
+                "auth_method": os.getenv(f'DISCORD_UBUNTU_SERVER_AUTH_METHOD_{i}', 'key').lower(),
+                "password": os.getenv(f'DISCORD_UBUNTU_SERVER_PASSWORD_{i}'),
+                "key": os.getenv(f'DISCORD_UBUNTU_SERVER_KEY_{i}')
+            }
+            servers.append(server)
+            i += 1
+
+        # 2. Backward compatibility for SERVERS_JSON (v0.1.0 style)
+        if not servers:
+            servers_raw = os.getenv('SERVERS_JSON')
+            if servers_raw:
+                try:
+                    servers = json.loads(servers_raw)
+                    logger.info("Loaded servers from legacy SERVERS_JSON.")
+                except json.JSONDecodeError:
+                    logger.error("Invalid JSON in SERVERS_JSON environment variable.")
+        
+        if servers:
+            logger.info(f"Initialized SSHManager with {len(servers)} servers.")
+        else:
+            logger.warning("No servers configured! Check your environment variables.")
+            
+        return servers
 
     def get_server_aliases(self) -> List[str]:
         """Return a list of all server aliases for autocomplete."""
@@ -45,18 +76,6 @@ class SSHManager:
         user = config.get('user', 'root')
         port = config.get('port', 22)
         auth_method = config.get('auth_method', 'key')
-        secret_env = config.get('secret_env')
-
-        if not secret_env:
-            err_msg = f"Error: 'secret_env' not defined for server '{alias}'."
-            logger.error(err_msg)
-            return err_msg
-
-        secret_value = os.getenv(secret_env)
-        if not secret_value:
-            err_msg = f"Error: Environment variable '{secret_env}' is empty or not found."
-            logger.error(err_msg)
-            return err_msg
 
         # Setup SSH Client
         client = paramiko.SSHClient()
@@ -64,12 +83,32 @@ class SSHManager:
 
         try:
             if auth_method == 'key':
-                # Handle Private Key
-                private_key = paramiko.RSAKey.from_private_key(io.StringIO(secret_value))
-                client.connect(hostname=host, port=port, username=user, pkey=private_key, timeout=10)
+                # Get key value (from config dict or legacy secret_env)
+                key_value = config.get('key') or os.getenv(config.get('secret_env', ''))
+                
+                if not key_value:
+                    return f"Error: SSH Key not provided for '{alias}'."
+
+                # Check if key_value is a path to a file (volume mount)
+                if os.path.exists(key_value) and os.path.isfile(key_value):
+                    client.connect(hostname=host, port=port, username=user, key_filename=key_value, timeout=10)
+                else:
+                    # Treat as raw key string
+                    try:
+                        private_key = paramiko.RSAKey.from_private_key(io.StringIO(key_value))
+                    except:
+                        try:
+                            private_key = paramiko.Ed25519Key.from_private_key(io.StringIO(key_value))
+                        except Exception as key_err:
+                            return f"Error: Could not parse SSH key string for '{alias}': {key_err}"
+                    
+                    client.connect(hostname=host, port=port, username=user, pkey=private_key, timeout=10)
             else:
                 # Handle Password
-                client.connect(hostname=host, port=port, username=user, password=secret_value, timeout=10)
+                password = config.get('password') or os.getenv(config.get('secret_env', ''))
+                if not password:
+                    return f"Error: Password not provided for '{alias}'."
+                client.connect(hostname=host, port=port, username=user, password=password, timeout=10)
 
             # Execute Command
             stdin, stdout, stderr = client.exec_command(command)
@@ -78,15 +117,11 @@ class SSHManager:
 
             client.close()
             
-            if error:
+            if error and not output:
                 logger.warning(f"Command on '{alias}' produced error output: {error.strip()}")
+                return error
             
-            return output if output else error
-
-        except Exception as e:
-            err_msg = f"SSH Error on '{alias}': {str(e)}"
-            logger.error(err_msg)
-            return err_msg
+            return output
 
     def get_containers(self, alias: str) -> List[str]:
         """Fetch all container names from a server for autocomplete."""

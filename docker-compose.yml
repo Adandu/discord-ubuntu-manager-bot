@@ -4,12 +4,13 @@ services:
     # build: . # Uncomment to build locally
     container_name: discobunty
     restart: unless-stopped
+    volumes:
+      - ./ssh_keys:/app/ssh_keys:ro
     env_file:
       - .env
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
       - GUILD_ID=${GUILD_ID}
-      - SERVERS_JSON=${SERVERS_JSON}
       - ENABLE_DOCKER=${ENABLE_DOCKER:-false}
       - PYTHONUNBUFFERED=1
     logging:
