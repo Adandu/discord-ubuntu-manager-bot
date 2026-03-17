@@ -9,7 +9,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: discord-ubuntu-manager-bot
+  IMAGE_NAME: discobunty
 
 jobs:
   build-and-push:
@@ -33,7 +33,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v4
         with:
-          images: ghcr.io/adandu/discord-ubuntu-manager-bot
+          images: ghcr.io/adandu/discobunty
           tags: |
             type=raw,value=latest
             type=sha,format=short
