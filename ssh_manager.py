@@ -98,11 +98,11 @@ class SSHManager:
     def get_container_details(self, alias: str, container_name: str) -> str:
         """Fetch image, IP, and ports for a container using docker inspect."""
         # Format the inspect output to get specific fields
-        # Added 'if $conf' to prevent failure on exposed-only but unmapped ports
+        # Using literal newlines in the Python string ensures they are sent correctly via SSH
         format_str = (
-            "Status: {{.State.Status}}\\n"
-            "Image: {{.Config.Image}}\\n"
-            "IP Address: {{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}\\n"
+            "Status: {{.State.Status}}\n"
+            "Image: {{.Config.Image}}\n"
+            "IP Address: {{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}\n"
             "Ports: {{range $p, $conf := .NetworkSettings.Ports}}{{$p}}{{if $conf}} -> {{(index $conf 0).HostPort}}{{end}} {{end}}"
         )
         cmd = f"sudo docker inspect --format '{format_str}' {container_name}"
