@@ -176,6 +176,7 @@ class PowerControlModal(discord.ui.Modal, title='Verify Power Action'):
 
         await interaction.response.defer(ephemeral=True)
         try:
+            logger.info(f"Power action '{self.action}' confirmed for server '{self.server}' by user {interaction.user} (ID: {interaction.user.id})")
             output = await asyncio.to_thread(ssh_manager.server_power_action, self.server, self.action)
             await interaction.followup.send(output, ephemeral=True)
         except Exception as e:

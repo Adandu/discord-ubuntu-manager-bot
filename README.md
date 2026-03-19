@@ -118,14 +118,30 @@ docker-compose up -d
 
 ---
 
-## 🔒 Security Recommendations
-- **Dedicated User:** Create a dedicated user on your Ubuntu servers for the bot (e.g., `discobunty`).
-- **Sudo Access:** To use `/update`, `/service`, or `/docker`, ensure the user has `sudo` permissions without a password.
-  - **Edit sudoers:** `sudo visudo`
-  - **Add line:** `discobunty ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/systemctl, /usr/bin/tail, /usr/bin/df, /usr/bin/docker`
+## 🛡️ Security Best Practices
+
+### Restricted Sudo Access
+For maximum security, do not give the SSH user full passwordless sudo. Instead, restrict it to only the commands required by DiscoBunty.
+
+Add the following to your `/etc/sudoers` file (replace `botuser` with your actual SSH user):
+
+```bash
+# Basic server management
+botuser ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/systemctl, /usr/bin/tail, /usr/bin/df, /usr/bin/realpath
+
+# Docker management (if enabled)
+botuser ALL=(ALL) NOPASSWD: /usr/bin/docker
+
+# Power control (if enabled)
+botuser ALL=(ALL) NOPASSWD: /usr/sbin/reboot, /usr/sbin/shutdown
+```
+
+### SSH Hardening
+- **Known Hosts:** Ensure the `KNOWN_HOSTS_FILE` is correctly configured to prevent Man-in-the-Middle attacks.
 - **SSH Keys:** Always prefer SSH Keys over passwords for better security.
 
 ---
 
 ## 📜 License
 MIT License. Feel free to use and contribute!
+

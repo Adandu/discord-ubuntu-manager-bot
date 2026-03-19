@@ -5,7 +5,7 @@ import io
 import logging
 import shlex
 import time
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
 logger = logging.getLogger('discobunty.ssh')
 
@@ -65,24 +65,20 @@ class SSHManager:
                 return s
         return None
 
-    def execute_command(self, alias: str, command: str) -> str:
-        """Connect to a server by alias and execute a command."""
-        logger.info(f"Executing command on '{alias}': {command}")
+    def _get_ssh_client(self, alias: str) -> Tuple[Optional[paramiko.SSHClient], Optional[str]]:
+        """Internal helper to create and connect an SSH client for a specific server."""
         config = self.get_server_by_alias(alias)
         if not config:
-            err_msg = f"Error: Server alias '{alias}' not found."
-            logger.error(err_msg)
-            return err_msg
+            return None, f"Error: Server alias '{alias}' not found."
 
-        # Extract connection details
         host = config.get('host')
         user = config.get('user', 'root')
         port = config.get('port', 22)
         auth_method = config.get('auth_method', 'key')
 
-        # Setup SSH Client
         client = paramiko.SSHClient()
         known_hosts_path = os.getenv('KNOWN_HOSTS_FILE', '/app/.ssh/known_hosts')
+        
         if os.path.exists(known_hosts_path):
             try:
                 client.load_host_keys(known_hosts_path)
@@ -90,53 +86,55 @@ class SSHManager:
                 logger.info(f"Loaded known_hosts from {known_hosts_path}")
             except Exception as e:
                 logger.error(f"Failed to load known_hosts: {e}")
-                return f"Error: Failed to load SSH known_hosts from {known_hosts_path}."
+                return None, f"Error: Failed to load SSH known_hosts from {known_hosts_path}."
         else:
-            # Require known_hosts for production-ready security
+            # Secure by default: Require known_hosts
             err_msg = f"Error: No known_hosts file found at {known_hosts_path}. SSH connection aborted for security."
             logger.error(err_msg)
-            return err_msg
+            return None, err_msg
 
         try:
             if auth_method == 'key':
-                # Get key value
                 key_value = config.get('key') or os.getenv(config.get('secret_env', ''))
-                
                 if not key_value:
-                    return f"Error: SSH Key not provided for '{alias}'."
+                    return None, f"Error: SSH Key not provided for '{alias}'."
 
-                # If the value looks like a path (starts with /), treat it as a file
                 if key_value.startswith('/') or (os.path.exists(key_value) and os.path.isfile(key_value)):
-                    if not os.path.exists(key_value):
-                        return f"Error: SSH Key file not found at '{key_value}' for '{alias}'."
                     client.connect(hostname=host, port=port, username=user, key_filename=key_value, timeout=10)
                 else:
-                    # Treat as raw key string - try multiple formats
                     private_key = None
                     for key_class in [paramiko.RSAKey, paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.DSSKey]:
                         try:
                             private_key = key_class.from_private_key(io.StringIO(key_value))
                             if private_key: break
-                        except Exception:
-                            continue
+                        except Exception: continue
                     
                     if not private_key:
-                        return f"Error: Could not parse SSH key string for '{alias}'. Ensure the format is correct."
+                        return None, f"Error: Could not parse SSH key string for '{alias}'."
                     
                     client.connect(hostname=host, port=port, username=user, pkey=private_key, timeout=10)
             else:
-                # Handle Password
                 password = config.get('password') or os.getenv(config.get('secret_env', ''))
                 if not password:
-                    return f"Error: Password not provided for '{alias}'."
+                    return None, f"Error: Password not provided for '{alias}'."
                 client.connect(hostname=host, port=port, username=user, password=password, timeout=10)
+            
+            return client, None
+        except Exception as e:
+            return None, str(e)
 
-            # Execute Command
+    def execute_command(self, alias: str, command: str) -> str:
+        """Connect to a server by alias and execute a command."""
+        client, err = self._get_ssh_client(alias)
+        if err:
+            logger.error(f"SSH Connection Error on '{alias}': {err}")
+            return f"SSH Error: {err}"
+
+        try:
             stdin, stdout, stderr = client.exec_command(command, timeout=60)
             output = stdout.read().decode('utf-8')
             error = stderr.read().decode('utf-8')
 
-            # If there's error output but also stdout, return both to be helpful
             if error and output:
                 return f"{output}\n[Error Output]\n{error}"
             elif error:
@@ -144,9 +142,8 @@ class SSHManager:
                 return error
             
             return output
-
         except Exception as e:
-            err_msg = f"SSH Error on '{alias}': {str(e)}"
+            err_msg = f"SSH Execution Error on '{alias}': {str(e)}"
             logger.error(err_msg)
             return err_msg
         finally:
@@ -154,7 +151,6 @@ class SSHManager:
 
     def get_containers(self, alias: str) -> List[str]:
         """Fetch all container names from a server for autocomplete."""
-        # Use --all to include stopped containers
         cmd = "sudo docker ps -a --format '{{.Names}}'"
         output = self.execute_command(alias, cmd)
         
@@ -166,7 +162,6 @@ class SSHManager:
 
     def container_action(self, alias: str, container_name: str, action: str) -> str:
         """Perform action (start, stop, restart) on a specific container."""
-        # Sanitize inputs
         safe_action = shlex.quote(action)
         safe_container = shlex.quote(container_name)
         cmd = f"sudo docker {safe_action} {safe_container}"
@@ -174,13 +169,11 @@ class SSHManager:
 
     def get_container_logs(self, alias: str, container_name: str, lines: int = 50, search: Optional[str] = None) -> str:
         """Fetch recent logs for a container, optionally filtering by search term."""
-        # Sanitize inputs
         safe_lines = shlex.quote(str(lines))
         safe_container = shlex.quote(container_name)
         
         if search:
             safe_search = shlex.quote(search)
-            # Use grep for search, -i for case-insensitive, -e to mark pattern explicitly (prevents flag injection)
             cmd = f"sudo docker logs --tail {safe_lines} {safe_container} 2>&1 | grep -i -e {safe_search} | tail -n {safe_lines}"
         else:
             cmd = f"sudo docker logs --tail {safe_lines} {safe_container}"
@@ -189,8 +182,6 @@ class SSHManager:
 
     def get_container_details(self, alias: str, container_name: str) -> str:
         """Fetch image, IP, and ports for a container using docker inspect."""
-        # Format the inspect output to get specific fields
-        # Using literal newlines in the Python string ensures they are sent correctly via SSH
         format_str = (
             "Status: {{.State.Status}}\n"
             "Image: {{.Config.Image}}\n"
@@ -203,9 +194,6 @@ class SSHManager:
 
     def get_system_stats(self, alias: str) -> str:
         """Fetch CPU, RAM, Disk, Load, and Uptime for the server."""
-        # Combine several commands to get a full snapshot
-        # CPU usage (100 - idle), Memory (Used/Total), Disk (Used/Total on /), Load Avg, Uptime
-        # Plus Network Interfaces and Total Traffic
         cmd = (
             "echo \"[CPU Usage]\" && "
             "grep 'cpu ' /proc/stat | awk '{usage=($2+$4)*100/($2+$4+$5)} END {printf \"%.1f%%\\n\", usage}' && "
@@ -232,8 +220,6 @@ class SSHManager:
             if now - ts < 300: # 5 minute cache
                 return files
 
-        # Find log files in /var/log and home directories, limiting depth and results
-        # Focused on .log files and common linux logs
         cmd = (
             "sudo find /var/log /home -maxdepth 3 -type f "
             "\\( -name \"*.log\" -o -name \"syslog\" -o -name \"auth.log\" -o -name \"kern.log\" \\) "
@@ -253,64 +239,20 @@ class SSHManager:
         if action not in ["reboot", "shutdown"]:
             return f"Error: Invalid action '{action}'. Use 'reboot' or 'shutdown'."
             
-        # Commands: sudo reboot, sudo shutdown -h now
         cmd = "sudo reboot" if action == "reboot" else "sudo shutdown -h now"
-        
         logger.info(f"Initiating {action} on '{alias}' via command: {cmd}")
         
-        # We wrap in a try-except because the SSH connection will be dropped immediately
+        client, err = self._get_ssh_client(alias)
+        if err:
+            logger.error(f"SSH Connection Error for {action} on '{alias}': {err}")
+            return f"SSH Error: {err}"
+
         try:
-            # We don't use execute_command because it waits for output and closes the client itself.
-            # Here we want to send the command and expect the connection to drop.
-            config = self.get_server_by_alias(alias)
-            if not config:
-                return f"Error: Server alias '{alias}' not found."
-
-            # Re-use internal logic for setup
-            import paramiko # Re-importing just in case, though it's global
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy()) # Defaulting to auto-add for this action for simplicity, or we could load keys
-            
-            # Since we need the client connection logic, let's just use a simplified version
-            host = config.get('host')
-            user = config.get('user', 'root')
-            port = config.get('port', 22)
-            auth_method = config.get('auth_method', 'key')
-
-            # Load known_hosts (copied logic from execute_command for safety)
-            known_hosts_path = os.getenv('KNOWN_HOSTS_FILE', '/app/.ssh/known_hosts')
-            if os.path.exists(known_hosts_path):
-                client.load_host_keys(known_hosts_path)
-                client.set_missing_host_key_policy(paramiko.RejectPolicy())
-            else:
-                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-            if auth_method == 'key':
-                key_value = config.get('key') or os.getenv(config.get('secret_env', ''))
-                if key_value.startswith('/') or (os.path.exists(key_value) and os.path.isfile(key_value)):
-                    client.connect(hostname=host, port=port, username=user, key_filename=key_value, timeout=10)
-                else:
-                    import io
-                    private_key = None
-                    for key_class in [paramiko.RSAKey, paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.DSSKey]:
-                        try:
-                            private_key = key_class.from_private_key(io.StringIO(key_value))
-                            if private_key: break
-                        except Exception: continue
-                    client.connect(hostname=host, port=port, username=user, pkey=private_key, timeout=10)
-            else:
-                password = config.get('password') or os.getenv(config.get('secret_env', ''))
-                client.connect(hostname=host, port=port, username=user, password=password, timeout=10)
-
-            # Send command
             transport = client.get_transport()
             channel = transport.open_session()
             channel.exec_command(cmd)
-            # We don't wait for output, as the server will reboot.
             return f"✅ Command `{cmd}` sent to `{alias}`. Server is {action}ing..."
-
         except Exception as e:
-            # If it's a "Connection reset" or "EOF", it's likely the server dropping the connection which is expected
             if "EOFError" in str(type(e)) or "Connection reset" in str(e):
                 return f"✅ Command `{cmd}` sent to `{alias}`. Server is {action}ing (Connection lost as expected)."
             
