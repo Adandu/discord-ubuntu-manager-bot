@@ -20,6 +20,11 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+# 🎨 Design & Assets (Stitch)
+DESIGN.md
+stitch.zip
+stitch_temp/
+
 # 🛡️ SSH & Secrets (Security Hardening)
 ssh_keys/
 *.key
