@@ -371,6 +371,15 @@
         let servers = {{ servers | tojson }};
         const config = {{ config | tojson }};
 
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
         function renderServers() {
             const list = document.getElementById('serverList');
             list.innerHTML = '';
@@ -383,9 +392,9 @@
                 const item = document.createElement('div');
                 item.className = 'server-item';
                 item.innerHTML = `
-                    <strong>${s.alias}</strong> (${s.host})
+                    <strong>${escapeHtml(s.alias)}</strong> (${escapeHtml(s.host)})
                     <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 5px;">
-                        User: ${s.user} | Port: ${s.port} | Auth: ${s.auth_method}
+                        User: ${escapeHtml(s.user)} | Port: ${escapeHtml(s.port)} | Auth: ${escapeHtml(s.auth_method)}
                     </div>
                     <div class="server-actions">
                         <button onclick="editServer(${index})" class="btn-primary" style="padding: 5px 10px; font-size: 0.7rem;">Edit</button>
@@ -506,7 +515,7 @@
                     power_control_password: document.getElementById('POWER_CONTROL_PASSWORD').value
                 },
                 webui: {
-                    enabled: 'true',
+                    enabled: config.webui.enabled,
                     password: document.getElementById('WEB_PASSWORD').value
                 },
                 servers: servers
@@ -551,9 +560,9 @@
                 const res = await fetch('/api/logs');
                 const data = await res.json();
                 if (data.logs) {
+                    const wasNearBottom = logBox.scrollHeight - logBox.clientHeight <= logBox.scrollTop + 50;
                     logBox.innerText = data.logs;
-                    const isNearBottom = logBox.scrollHeight - logBox.clientHeight <= logBox.scrollTop + 50;
-                    if (isNearBottom) logBox.scrollTop = logBox.scrollHeight;
+                    if (wasNearBottom) logBox.scrollTop = logBox.scrollHeight;
                 } else {
                     logBox.innerText = 'Waiting for logs...';
                 }

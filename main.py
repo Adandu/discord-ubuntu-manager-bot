@@ -301,10 +301,9 @@ async def dashboard(request: Request):
             s["key"] = "********"
 
     return templates.TemplateResponse("index.html", {
-        "request": request, 
-        "config": display_config, 
+        "request": request,
+        "config": display_config,
         "servers": display_config["servers"],
-        "master_secret": MASTER_KEY
     })
 
 @app.get("/login", response_class=HTMLResponse)
@@ -347,23 +346,25 @@ async def test_server(request: Request, server_data: dict):
 async def save_config_ui(request: Request, data: dict):
     if not is_authenticated(request): raise HTTPException(status_code=401)
     
-    # Preserve actual values if masked (********) were sent
+    # Restore masked values and sync config sections
+    if data.get("discord", {}).get("token") == "********":
+        data["discord"]["token"] = config["discord"].get("token", "")
+    if data.get("webui", {}).get("password") == "********":
+        data["webui"]["password"] = config["webui"].get("password", "")
+    if data.get("features", {}).get("power_control_password") == "********":
+        data["features"]["power_control_password"] = config["features"].get("power_control_password", "")
+
     if "servers" in data:
         for i, s in enumerate(data["servers"]):
             if i < len(config["servers"]):
                 orig = config["servers"][i]
                 if s.get("password") == "********": s["password"] = orig.get("password")
                 if s.get("key") == "********": s["key"] = orig.get("key")
-        
-        if data["discord"].get("token") == "********": data["discord"]["token"] = config["discord"]["token"]
-        if data["webui"].get("password") == "********": data["webui"]["password"] = config["webui"]["password"]
-        if data["features"].get("power_control_password") == "********": data["features"]["power_control_password"] = config["features"]["power_control_password"]
 
-        # Sync full mode
-        config["discord"] = data.get("discord", config["discord"])
-        config["features"] = data.get("features", config["features"])
-        config["webui"] = data.get("webui", config["webui"])
-        config["servers"] = data.get("servers", config["servers"])
+    config["discord"] = data.get("discord", config["discord"])
+    config["features"] = data.get("features", config["features"])
+    config["webui"] = data.get("webui", config["webui"])
+    config["servers"] = data.get("servers", config["servers"])
     
     # Update SECRET_KEY in .env if changed
     if "SECRET_KEY" in data:
