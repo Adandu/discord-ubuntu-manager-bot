@@ -5,13 +5,12 @@ on:
     tags:
       - 'v*'
 
-env:
-  # Opt-in to Node.js 24 for future-proofing
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      # Opt-in to Node.js 24 for future-proofing
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     permissions:
       contents: write
     steps:
