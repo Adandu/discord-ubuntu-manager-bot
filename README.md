@@ -38,56 +38,6 @@ Whoever wants to use this bot, they do so at their own risk. The authors and cre
 
 ---
 
-## 🚀 Recent Release Notes (v0.7.3)
-
-- **Fix:** Resolved Material Symbols icon rendering by using a more robust font link and specifically allowing `fonts.gstatic.com` in the CSP.
-- **Branding:** Added `shortcut icon` relation for the favicon to ensure better browser compatibility.
-
-## 🚀 Recent Release Notes (v0.7.2)
-
-- **Branding:** Added `logo.svg` as the site favicon for all WebUI pages.
-- **Fix:** Corrected Material Symbols rendering by updating font URLs and ensuring CSP allows connections to Google Fonts.
-- **Security:** Further hardened `Content-Security-Policy` to specifically allow font and icon CDNs.
-
-## 🚀 Recent Release Notes (v0.7.1)
-
-- **Fix:** Corrected `Content-Security-Policy` (CSP) headers in `main.py` to allow trusted CDNs (Tailwind CSS, Google Fonts). This resolves the issue where the WebUI would render without styles on some browsers.
-
-## 🚀 Recent Release Notes (v0.7.0)
-
-- **UI Overhaul (Neon Architect):** 
-  - Major visual migration to the "Neon Architect" design system.
-  - New high-depth "Command Console" aesthetic with tactical sidebars, glass headers, and Bento grid components.
-  - Implemented a borderless surface hierarchy (`surface-container-low` through `highest`) with custom ambient glow aesthetics.
-  - Redesigned the login page as a frosted acrylic card with tactical focus states and "no-line" error panels.
-  - Integrated Material Symbols and refined typography (Manrope & Inter) for a high-end editorial feel.
-- **Security Hardening (Session & CSRF):** 
-  - Implemented a robust, session-bound CSRF token mechanism for all state-changing WebUI requests.
-  - Replaced the hardcoded login page with a secure `templates/login.html` supporting CSRF validation.
-  - Converted `/logout` from `GET` to `POST` to prevent CSRF-based forced logouts.
-  - Added `validate_csrf_form()` to handle CSRF tokens in traditional form submissions.
-  - Added security-hardening headers (HSTS, CSP, X-Frame-Options, X-Content-Type-Options) to all WebUI responses.
-- **Bug Fixes & Logic Improvements:**
-  - Refactored `save_config_ui` logic in `main.py` to ensure masked-value restoration and configuration synchronization are handled reliably.
-  - Fixed the log auto-scroll logic in `index.html` to correctly trigger only when the user is already near the bottom.
-  - Updated `saveCoreConfig` in `index.html` to correctly reference `config.webui.enabled` instead of a hardcoded value.
-  - Removed `master_secret` from the template context to prevent leaking the session signing key.
-  - Added HTML escaping to all server fields in the WebUI to prevent XSS.
-
-## 🚀 Recent Release Notes (v0.6.0)
-
-- **Feature:** Implemented a new **Secure Web Control Panel** (accessible on port 8083 by default).
-- **Feature:** Added **Encrypted JSON Configuration** (`config.json`).
-- **Feature:** Added **SSH Connectivity Tester** in the WebUI.
-- **Feature:** Added **Live Application Log Streaming** to the dashboard.
-- **Security:** Added encryption for Discord tokens and all SSH credentials.
-- **Security:** Implemented `hmac.compare_digest` for login and session rotation.
-- **Security:** Masked all secrets in the WebUI to prevent exposure.
-- **Fix:** Resolved template loading issues in Docker environments.
-- **Fix:** Optimized memory usage for log buffering.
-
----
-
 ## 📦 Setup & Deployment
 
 ### 1. Requirements
