@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
     <title>DiscoBunty Dashboard</title>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
     <style>
@@ -245,7 +246,10 @@
     <header>
         <div style="width: 50px;"></div> <!-- Spacer -->
         <h1>DiscoBunty Control Panel</h1>
-        <a href="/logout" class="logout-btn">Logout</a>
+        <form method="post" action="/logout" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="logout-btn" style="background:none; border:none; cursor:pointer;">Logout</button>
+        </form>
     </header>
 
     <div class="container">
@@ -370,6 +374,7 @@
     <script>
         let servers = {{ servers | tojson }};
         const config = {{ config | tojson }};
+        const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
 
         function escapeHtml(str) {
             return String(str)
@@ -456,7 +461,7 @@
             try {
                 const res = await fetch('/api/test-server', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
                     body: JSON.stringify(serverData)
                 });
                 const result = await res.json();
@@ -546,7 +551,7 @@
             try {
                 const res = await fetch('/save', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
                     body: JSON.stringify(data)
                 });
                 if (res.ok) alert('Configuration saved successfully!');

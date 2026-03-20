@@ -6,6 +6,10 @@ import asyncio
 import json
 import hmac
 import copy
+import secrets
+import posixpath
+import time
+from collections import deque, defaultdict
 from discord import app_commands
 from dotenv import load_dotenv
 from ssh_manager import SSHManager
@@ -19,11 +23,39 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 import uvicorn
 
-from collections import deque
-
 # Configure logging with an in-memory buffer for the WebUI
 log_buffer = deque(maxlen=500)
 log_buffer.append(f"System Initialized. Log capture started.")
+
+# --- Login Rate Limiter ---
+class LoginRateLimiter:
+    """Simple in-memory rate limiter: max_attempts per window_seconds per IP."""
+    def __init__(self, max_attempts: int = 5, window_seconds: int = 60):
+        self.max_attempts = max_attempts
+        self.window_seconds = window_seconds
+        self._attempts: dict = defaultdict(list)
+
+    def is_allowed(self, key: str) -> bool:
+        now = time.time()
+        self._attempts[key] = [t for t in self._attempts[key] if now - t < self.window_seconds]
+        if len(self._attempts[key]) >= self.max_attempts:
+            return False
+        self._attempts[key].append(now)
+        return True
+
+    def reset(self, key: str):
+        self._attempts.pop(key, None)
+
+login_limiter = LoginRateLimiter(max_attempts=5, window_seconds=60)
+api_limiter = LoginRateLimiter(max_attempts=30, window_seconds=60)
+
+def _get_client_ip(request: Request) -> str:
+    """Return the client IP address, taking only the first (leftmost) value from
+    X-Forwarded-For to avoid spoofing via attacker-controlled intermediate hops."""
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 class WebUIHandler(logging.Handler):
     def emit(self, record):
@@ -213,21 +245,24 @@ async def service(interaction: discord.Interaction, server: str, action: str, na
 @app_commands.autocomplete(server=server_autocomplete, path=log_autocomplete)
 async def system_logs(interaction: discord.Interaction, server: str, path: str, lines: int = 20, search: str = None):
     await interaction.response.defer()
-    if not any(path.startswith(root) for root in ALLOWED_LOG_ROOTS) or ".." in path:
+    # Normalize the path to resolve any traversal sequences before checking allowlist
+    normalized_path = posixpath.normpath(path)
+    if not any(normalized_path.startswith(root) for root in ALLOWED_LOG_ROOTS):
         await interaction.followup.send(f"❌ Access denied to path: `{path}`", ephemeral=True)
         return
     lines = min(max(1, lines), 100)
-    cmd = f"sudo tail -n {lines} {shlex.quote(path)}"
+    cmd = f"sudo tail -n {lines} {shlex.quote(normalized_path)}"
     if search:
         cmd += f" | grep -i -e {shlex.quote(search)}"
     output = await asyncio.to_thread(ssh_manager.execute_command, server, cmd)
-    await interaction.followup.send(f"**Last {lines} lines of `{path}` on `{server}`:**\n```\n{output[:MAX_MSG_LEN]}\n```")
+    await interaction.followup.send(f"**Last {lines} lines of `{normalized_path}` on `{server}`:**\n```\n{output[:MAX_MSG_LEN]}\n```")
 
 # --- Docker Group ---
 if config["features"].get("enable_docker") == "true":
     docker_group = app_commands.Group(name="docker", description="Manage Docker containers")
     
     @docker_group.command(name="ps", description="List containers on a server")
+    @app_commands.check(lambda i: check_permissions(i.user))
     @app_commands.autocomplete(server=server_autocomplete)
     async def docker_ps(interaction: discord.Interaction, server: str, all: bool = True):
         await interaction.response.defer()
@@ -236,6 +271,7 @@ if config["features"].get("enable_docker") == "true":
         await interaction.followup.send(f"**Containers on `{server}`:**\n```\n{output[:MAX_MSG_LEN]}\n```")
 
     @docker_group.command(name="control", description="Start, stop, or restart a container")
+    @app_commands.check(lambda i: check_permissions(i.user))
     @app_commands.autocomplete(server=server_autocomplete, container=container_autocomplete)
     @app_commands.choices(action=[
         app_commands.Choice(name="start", value="start"),
@@ -248,6 +284,7 @@ if config["features"].get("enable_docker") == "true":
         await interaction.followup.send(f"**Action `{action}` on container `{container}` (`{server}`):**\n```\n{output[:MAX_MSG_LEN]}\n```")
 
     @docker_group.command(name="logs", description="View container logs")
+    @app_commands.check(lambda i: check_permissions(i.user))
     @app_commands.autocomplete(server=server_autocomplete, container=container_autocomplete)
     async def docker_logs(interaction: discord.Interaction, server: str, container: str, lines: int = 50, search: str = None):
         await interaction.response.defer()
@@ -257,6 +294,7 @@ if config["features"].get("enable_docker") == "true":
         await interaction.followup.send(f"{header}\n```\n{output[:MAX_MSG_LEN]}\n```")
 
     @docker_group.command(name="details", description="View container image, IP, and ports")
+    @app_commands.check(lambda i: check_permissions(i.user))
     @app_commands.autocomplete(server=server_autocomplete, container=container_autocomplete)
     async def docker_details(interaction: discord.Interaction, server: str, container: str):
         await interaction.response.defer()
@@ -273,7 +311,34 @@ MASTER_KEY = os.getenv("SECRET_KEY")
 if not MASTER_KEY:
     raise ValueError("SECRET_KEY environment variable is mandatory for WebUI session security.")
 
-app.add_middleware(SessionMiddleware, secret_key=MASTER_KEY)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=MASTER_KEY,
+    session_cookie="session",
+    same_site="strict",   # CSRF protection: browser won't send cookie on cross-origin requests
+    https_only=False,     # Set to True if serving over HTTPS
+    max_age=3600,         # Sessions expire after 1 hour of inactivity
+)
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    # CSP: lock down resource origins; unsafe-inline required for inline scripts/styles in the template
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self'; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none';"
+    )
+    return response
 
 # Use absolute path for templates to ensure they are found in all environments (Docker vs Local)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -283,6 +348,27 @@ def is_authenticated(request: Request):
     web_pass = config["webui"].get("password")
     if not web_pass: return False
     return request.session.get("authenticated") == True
+
+def get_csrf_token(request: Request) -> str:
+    """Get existing CSRF token from session, or generate and store a new one."""
+    token = request.session.get("csrf_token")
+    if not token:
+        token = secrets.token_hex(32)
+        request.session["csrf_token"] = token
+    return token
+
+def validate_csrf(request: Request) -> None:
+    """Validate X-CSRF-Token header against the session token. Raises 403 on failure."""
+    session_token = request.session.get("csrf_token")
+    header_token = request.headers.get("X-CSRF-Token", "")
+    if not session_token or not hmac.compare_digest(session_token, header_token):
+        raise HTTPException(status_code=403, detail="CSRF token missing or invalid")
+
+def validate_csrf_form(request: Request, form_token: str) -> None:
+    """Validate a CSRF token submitted as a form field against the session token."""
+    session_token = request.session.get("csrf_token")
+    if not session_token or not form_token or not hmac.compare_digest(session_token, form_token):
+        raise HTTPException(status_code=403, detail="CSRF token missing or invalid")
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
@@ -304,33 +390,48 @@ async def dashboard(request: Request):
         "request": request,
         "config": display_config,
         "servers": display_config["servers"],
+        "csrf_token": get_csrf_token(request),
     })
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    return HTMLResponse("<html><head><title>DiscoBunty Login</title><style>body{background:#300a24;color:white;display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;}form{background:#2b2d31;padding:40px;border-radius:8px;box-shadow:0 10px 25px rgba(0,0,0,0.5);width:300px;}h2{color:#E95420;text-align:center;}input{width:100%;padding:12px;margin-bottom:20px;border-radius:4px;border:none;background:#1e1f22;color:white;box-sizing:border-box;}button{width:100%;padding:12px;background:#5865F2;color:white;border:none;border-radius:4px;cursor:pointer;font-weight:bold;}</style></head><body><form method='post'><h2>DiscoBunty Login</h2><input type='password' name='password' placeholder='Password' required autofocus><button type='submit'>Login</button></form></body></html>")
+    error = request.query_params.get("error")
+    return templates.TemplateResponse("login.html", {
+        "request": request,
+        "csrf_token": get_csrf_token(request),
+        "error": error,
+    })
 
 @app.post("/login")
-async def login(request: Request, password: str = Form(...)):
+async def login(request: Request, password: str = Form(...), csrf_token: str = Form(...)):
+    validate_csrf_form(request, csrf_token)
+
+    client_ip = _get_client_ip(request)
+    if not login_limiter.is_allowed(client_ip):
+        return RedirectResponse(url="/login?error=ratelimit", status_code=303)
+
     stored_pass = config["webui"].get("password", "")
     if not stored_pass:
         return RedirectResponse(url="/login?error=no_pass", status_code=303)
-        
+
     # Use hmac.compare_digest to prevent timing attacks
     if hmac.compare_digest(password, stored_pass):
         request.session.clear() # Rotate session on login
         request.session["authenticated"] = True
+        login_limiter.reset(client_ip)
         return RedirectResponse(url="/", status_code=303)
     return RedirectResponse(url="/login?error=1", status_code=303)
 
-@app.get("/logout")
-async def logout(request: Request):
+@app.post("/logout")
+async def logout(request: Request, csrf_token: str = Form(...)):
+    validate_csrf_form(request, csrf_token)
     request.session.clear()
-    return RedirectResponse(url="/login")
+    return RedirectResponse(url="/login", status_code=303)
 
 @app.post("/api/test-server")
 async def test_server(request: Request, server_data: dict):
     if not is_authenticated(request): raise HTTPException(status_code=401)
+    validate_csrf(request)
     
     # If password/key is masked (********), use the original from config
     if server_data.get("alias"):
@@ -345,6 +446,18 @@ async def test_server(request: Request, server_data: dict):
 @app.post("/save")
 async def save_config_ui(request: Request, data: dict):
     if not is_authenticated(request): raise HTTPException(status_code=401)
+    validate_csrf(request)
+
+    # Validate server config inputs
+    for s in data.get("servers", []):
+        try:
+            port = int(s.get("port", 22))
+            if not (1 <= port <= 65535):
+                raise HTTPException(status_code=422, detail=f"Invalid port {port} for server '{s.get('alias')}'")
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=422, detail=f"Port must be a number for server '{s.get('alias')}'")
+        if s.get("auth_method") not in ("key", "password"):
+            raise HTTPException(status_code=422, detail=f"auth_method must be 'key' or 'password'")
     
     # Restore masked values and sync config sections
     if data.get("discord", {}).get("token") == "********":
@@ -381,6 +494,10 @@ async def get_app_logs(request: Request):
     if not is_authenticated(request): raise HTTPException(status_code=401)
     return {"logs": "\n".join(list(log_buffer))}
 
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 # --- Main Logic ---
 async def main():
     tasks = []
@@ -389,7 +506,7 @@ async def main():
     if config["webui"].get("enabled") == "true":
         uv_config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
         tasks.append(uvicorn.Server(uv_config).serve())
-    if tasks: await asyncio.gather(*tasks)
+    if tasks: await asyncio.gather(*tasks, return_exceptions=True)
 
 if __name__ == "__main__":
     try: asyncio.run(main())
