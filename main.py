@@ -330,11 +330,11 @@ async def add_security_headers(request: Request, call_next):
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     # CSP: allow trusted CDNs for styling and functionality
     response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "
+        "default-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com https://cdn.tailwindcss.com; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-        "img-src 'self' data: https://lh3.googleusercontent.com; "
-        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data: *; "
+        "font-src 'self' data: https://fonts.gstatic.com; "
         "connect-src 'self' https://fonts.googleapis.com; "
         "frame-ancestors 'none';"
     )

@@ -38,6 +38,11 @@ Whoever wants to use this bot, they do so at their own risk. The authors and cre
 
 ---
 
+## 🚀 Recent Release Notes (v0.7.3)
+
+- **Fix:** Resolved Material Symbols icon rendering by using a more robust font link and specifically allowing `fonts.gstatic.com` in the CSP.
+- **Branding:** Added `shortcut icon` relation for the favicon to ensure better browser compatibility.
+
 ## 🚀 Recent Release Notes (v0.7.2)
 
 - **Branding:** Added `logo.svg` as the site favicon for all WebUI pages.
