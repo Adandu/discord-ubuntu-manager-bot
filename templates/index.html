@@ -331,17 +331,15 @@
             </div>
         </div>
 
-        <!-- Logs Viewer -->
+        <!-- Application Logs Section -->
         <div class="card full-width">
-            <h2>Container Logs Viewer</h2>
-            <div style="display: flex; gap: 15px; flex-wrap: wrap;">
-                <select id="logServerSelect" style="flex: 1; min-width: 200px;">
-                    <option value="">Select Server...</option>
-                </select>
-                <input type="text" id="logContainerInput" placeholder="Container Name" style="flex: 1; min-width: 200px;">
-                <button onclick="fetchLogs()" class="btn-primary">Fetch Logs</button>
-            </div>
-            <div id="logs-container">Select a server and enter a container name to view logs...</div>
+            <h2>
+                Application Logs
+                <div style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);">
+                    Auto-refreshing every 5 seconds
+                </div>
+            </h2>
+            <div id="logs-container">Loading application logs...</div>
         </div>
     </div>
 
@@ -591,28 +589,29 @@
         }
 
         async function fetchLogs() {
-            const server = document.getElementById('logServerSelect').value;
-            const container = document.getElementById('logContainerInput').value;
             const logBox = document.getElementById('logs-container');
-
-            if (!server || !container) {
-                alert('Please select a server and enter a container name.');
-                return;
-            }
-
-            logBox.innerText = 'Fetching logs...';
             try {
-                const res = await fetch(`/api/logs?server=${server}&container=${container}`);
+                const res = await fetch('/api/logs');
                 const data = await res.json();
-                logBox.innerText = data.logs || 'No logs found.';
-                logBox.scrollTop = logBox.scrollHeight;
+                if (data.logs) {
+                    logBox.innerText = data.logs;
+                    // Auto-scroll to bottom if near bottom
+                    const isNearBottom = logBox.scrollHeight - logBox.clientHeight <= logBox.scrollTop + 50;
+                    if (isNearBottom) {
+                        logBox.scrollTop = logBox.scrollHeight;
+                    }
+                } else {
+                    logBox.innerText = 'Waiting for logs...';
+                }
             } catch (e) {
-                logBox.innerText = 'Error: ' + e.message;
+                console.error('Log fetch error:', e);
             }
         }
 
-        // Initial render
+        // Initial render and start polling
         renderServers();
+        fetchLogs();
+        setInterval(fetchLogs, 5000);
     </script>
 </body>
 </html>

@@ -17,11 +17,24 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 import uvicorn
 
-# Configure logging
+from collections import deque
+
+# Configure logging with an in-memory buffer for the WebUI
+log_buffer = deque(maxlen=500)
+
+class WebUIHandler(logging.Handler):
+    def emit(self, record):
+        log_entry = self.format(record)
+        log_buffer.append(log_entry)
+
+# Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
+    handlers=[
+        logging.StreamHandler(),
+        WebUIHandler()
+    ]
 )
 logger = logging.getLogger('discobunty')
 
@@ -233,10 +246,9 @@ async def save_config_ui(request: Request, data: dict):
     return {"status": "success"}
 
 @app.get("/api/logs")
-async def get_logs(request: Request, server: str, container: str):
+async def get_app_logs(request: Request):
     if not is_authenticated(request): raise HTTPException(status_code=401)
-    logs = await asyncio.to_thread(ssh_manager.get_container_logs, server, container, 100)
-    return {"logs": logs}
+    return {"logs": "\n".join(list(log_buffer))}
 
 # --- Main Logic ---
 async def main():
