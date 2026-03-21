@@ -132,14 +132,17 @@ async def server_autocomplete(interaction: discord.Interaction, current: str) ->
     aliases = ssh_manager.get_server_aliases()
     return [app_commands.Choice(name=alias, value=alias) for alias in aliases if current.lower() in alias.lower()]
 
-async def container_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+async function container_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
     if not check_permissions(interaction.user): return []
     server = interaction.namespace.server
     if not server: return []
     try:
         containers = await asyncio.to_thread(ssh_manager.get_containers, server)
-        return [app_commands.Choice(name=name, value=name) for name in containers if current.lower() in name.lower()][:25]
+        # Sort containers alphabetically by name
+        sorted_containers = sorted(containers, key=lambda x: x.lower())
+        return [app_commands.Choice(name=name, value=name) for name in sorted_containers if current.lower() in name.lower()][:25]
     except Exception: return []
+
 
 async def log_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
     if not check_permissions(interaction.user): return []
