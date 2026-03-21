@@ -7,7 +7,6 @@ import json
 import hmac
 import copy
 import secrets
-import posixpath
 import time
 from collections import deque, defaultdict
 from discord import app_commands
@@ -48,6 +47,16 @@ class LoginRateLimiter:
 
 login_limiter = LoginRateLimiter(max_attempts=5, window_seconds=60)
 api_limiter = LoginRateLimiter(max_attempts=30, window_seconds=60)
+
+# --- Audit Logger ---
+AUDIT_LOG_FILE = "audit.log"
+def audit_log(user_id: int, username: str, command: str, details: str):
+    """Log privileged actions to a persistent file."""
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"[{timestamp}] USER:{user_id} ({username}) | CMD:{command} | {details}\n"
+    with open(AUDIT_LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(log_entry)
+    logger.info(f"AUDIT: {log_entry.strip()}")
 
 def _get_client_ip(request: Request) -> str:
     """Return the client IP address, taking only the first (leftmost) value from
@@ -191,6 +200,7 @@ async def server_power(interaction: discord.Interaction, server: str, action: st
     if config["features"].get("power_control_enabled") != "true":
         await interaction.response.send_message("❌ Power control is currently disabled.", ephemeral=True)
         return
+    audit_log(interaction.user.id, interaction.user.name, "server_power", f"Action: {action} | Server: {server}")
     view = PowerConfirmationView(server, action)
     await interaction.response.send_message(content=f"⚠️ **Warning:** You are about to **{action}** server `{server}`. Are you sure?", view=view, ephemeral=True)
 
@@ -239,6 +249,7 @@ async def process(interaction: discord.Interaction, server: str, search: str):
 ])
 async def service(interaction: discord.Interaction, server: str, action: str, name: str):
     await interaction.response.defer()
+    audit_log(interaction.user.id, interaction.user.name, "service", f"Action: {action} | Service: {name} | Server: {server}")
     cmd = f"sudo systemctl {shlex.quote(action)} {shlex.quote(name)}"
     output = await asyncio.to_thread(ssh_manager.execute_command, server, cmd)
     await interaction.followup.send(f"**Service `{name}` {action} on `{server}`**:\n```\n{output[:MAX_MSG_LEN]}\n```")
@@ -248,11 +259,17 @@ async def service(interaction: discord.Interaction, server: str, action: str, na
 @app_commands.autocomplete(server=server_autocomplete, path=log_autocomplete)
 async def system_logs(interaction: discord.Interaction, server: str, path: str, lines: int = 20, search: str = None):
     await interaction.response.defer()
-    # Normalize the path to resolve any traversal sequences before checking allowlist
-    normalized_path = posixpath.normpath(path)
+    
+    # 1. Resolve remote symlinks to prevent traversal via evil symlinks
+    real_path = await asyncio.to_thread(ssh_manager.resolve_remote_path, server, path)
+    
+    # 2. Normalize the path locally to resolve any traversal sequences
+    normalized_path = os.path.normpath(real_path).replace("\\", "/") # Ensure POSIX style for remote
+    
     if not any(normalized_path.startswith(root) for root in ALLOWED_LOG_ROOTS):
-        await interaction.followup.send(f"❌ Access denied to path: `{path}`", ephemeral=True)
+        await interaction.followup.send(f"❌ Access denied to path: `{path}` (resolved to `{normalized_path}`)", ephemeral=True)
         return
+        
     lines = min(max(1, lines), 100)
     cmd = f"sudo tail -n {lines} {shlex.quote(normalized_path)}"
     if search:
@@ -283,6 +300,7 @@ if config["features"].get("enable_docker") == "true":
     ])
     async def docker_control(interaction: discord.Interaction, server: str, action: str, container: str):
         await interaction.response.defer()
+        audit_log(interaction.user.id, interaction.user.name, "docker_control", f"Action: {action} | Container: {container} | Server: {server}")
         output = await asyncio.to_thread(ssh_manager.container_action, server, container, action)
         await interaction.followup.send(f"**Action `{action}` on container `{container}` (`{server}`):**\n```\n{output[:MAX_MSG_LEN]}\n```")
 
@@ -333,8 +351,8 @@ async def add_security_headers(request: Request, call_next):
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     # CSP: allow trusted CDNs for styling and functionality
     response.headers["Content-Security-Policy"] = (
-        "default-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com https://cdn.tailwindcss.com; "
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com; "
+        "default-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; "
+        "script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "img-src 'self' data: *; "
         "font-src 'self' data: https://fonts.gstatic.com; "
@@ -441,6 +459,10 @@ async def test_server(request: Request, server_data: dict):
     if not is_authenticated(request): raise HTTPException(status_code=401)
     validate_csrf(request)
     
+    client_ip = _get_client_ip(request)
+    if not api_limiter.is_allowed(client_ip):
+        raise HTTPException(status_code=429, detail="Too many requests. Please wait before testing again.")
+
     trust_host = server_data.get("trust_host", False)
     alias = server_data.get("alias")
     host = server_data.get("host")
@@ -448,6 +470,8 @@ async def test_server(request: Request, server_data: dict):
     # Port validation to prevent 500 error
     try:
         port = int(server_data.get("port", 22))
+        if not (1 <= port <= 65535):
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Invalid port {port}. Must be 1-65535."})
     except (ValueError, TypeError):
         return JSONResponse(status_code=400, content={"success": False, "message": "Invalid port number."})
 
@@ -475,6 +499,10 @@ async def test_server(request: Request, server_data: dict):
 async def save_config_ui(request: Request, data: dict):
     if not is_authenticated(request): raise HTTPException(status_code=401)
     validate_csrf(request)
+
+    client_ip = _get_client_ip(request)
+    if not api_limiter.is_allowed(client_ip):
+        raise HTTPException(status_code=429, detail="Too many requests. Please wait before saving again.")
 
     # Validate server config inputs
     for s in data.get("servers", []):

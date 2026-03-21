@@ -47,7 +47,7 @@ class CryptoManager:
             # Value was encrypted with the old SHA256 key — migrate transparently
             try:
                 plaintext = self._legacy_fernet.decrypt(encrypted_data.encode()).decode()
-                logger.debug("Decrypted value using legacy SHA256 key — will be re-encrypted with PBKDF2 on next save.")
+                logger.warning("Decrypted value using legacy SHA256 key — security upgrade required (re-save config to use PBKDF2).")
                 return plaintext
             except Exception as e:
                 logger.error(f"Decryption failed with both primary and legacy key: {e}")

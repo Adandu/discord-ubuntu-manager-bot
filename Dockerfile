@@ -39,5 +39,9 @@ COPY --chown=botuser:botgroup . .
 # Switch to non-root user
 USER botuser
 
+# Healthcheck to monitor FastAPI application
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8000/health || exit 1
+
 # Command to run the bot
 CMD ["python", "main.py"]
